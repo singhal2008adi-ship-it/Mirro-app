@@ -8,13 +8,10 @@ import { Camera, Sparkles, ShoppingBag, ArrowRight } from "lucide-react";
 export default function LoginPage() {
   const [step, setStep] = useState(0);
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!auth);
 
   useEffect(() => {
-    if (!auth) {
-      setLoading(false);
-      return;
-    }
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         router.push("/");

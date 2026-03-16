@@ -10,6 +10,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "canvas": "^3.2.1",
     "cheerio": "^1.2.0",
     "firebase": "^12.10.0",

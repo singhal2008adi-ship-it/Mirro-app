@@ -7,10 +7,11 @@ import MagicMirror from "@/components/MagicMirror";
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!auth);
   const router = useRouter();
 
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
         router.push("/login");
@@ -48,7 +49,7 @@ export default function Home() {
       <header className="flex justify-between items-center mb-8">
         <h1 className="text-2xl font-bold tracking-tight text-black">Mirro</h1>
         <button
-          onClick={() => signOut(auth)}
+          onClick={() => auth && signOut(auth)}
           className="text-sm font-medium text-gray-500 hover:text-black transition-colors"
         >
           Logout

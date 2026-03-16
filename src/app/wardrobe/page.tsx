@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
 import { ArrowLeft, Plus } from "lucide-react";
 import Link from "next/link";
@@ -14,17 +14,16 @@ interface SavedLook {
 }
 
 export default function WardrobePage() {
-  const [user, setUser] = useState<User | null>(null);
   const [looks, setLooks] = useState<SavedLook[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!auth);
   const router = useRouter();
 
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
         router.push("/login");
       } else {
-        setUser(currentUser);
         fetchLooks(currentUser.uid);
       }
     });
@@ -32,6 +31,10 @@ export default function WardrobePage() {
   }, [router]);
 
   const fetchLooks = async (userId: string) => {
+    if (!db) {
+      setLoading(false);
+      return;
+    }
     try {
       const q = query(
         collection(db, "looks"),

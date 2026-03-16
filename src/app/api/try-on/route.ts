@@ -5,27 +5,59 @@ export async function POST(req: Request) {
     const { basePhotoUrl, targetImageUrl } = await req.json();
     const hfToken = process.env.HF_API_TOKEN;
 
-    if (!hfToken) {
-      console.warn("HF_API_TOKEN is missing. Using mock data.");
-    }
-
     if (!basePhotoUrl || !targetImageUrl) {
       return NextResponse.json({ error: 'Both base and target images are required' }, { status: 400 });
     }
 
-    // Hugging Face API call (mocked for prototype)
+    if (!hfToken) {
+      console.warn("HF_API_TOKEN is missing. Returning simulated result.");
+      // Simulated processing time
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      return NextResponse.json({ 
+        result: targetImageUrl, // Just return target for simulation
+        simulated: true,
+        message: "Configure HF_API_TOKEN for real AI try-on"
+      });
+    }
+
+    // Example Hugging Face Inference API call
+    // For virtual try-on, we'd typically use a model like 'levihsu/OOTDiffusion' or similar
+    // This is a placeholder for the actual API call structure
     console.log("Calling HF Try-On API with base:", basePhotoUrl, "and target:", targetImageUrl);
 
-    // Mock waiting for processing time
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    const response = await fetch(
+      "https://api-inference.huggingface.co/models/yisol/IDM-VTON",
+      {
+        headers: { Authorization: `Bearer ${hfToken}`, "Content-Type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({
+          inputs: {
+            "background": basePhotoUrl,
+            "garment": targetImageUrl
+          }
+        }),
+      }
+    );
 
-    // For the prototype, we just return the target image or a placeholder
-    // In production, this would be the generated output image.
-    const resultImageUrl = targetImageUrl; 
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || "Failed to process try-on via HF API");
+    }
 
-    return NextResponse.json({ result: resultImageUrl });
-  } catch (error) {
+    // In a real scenario, this might return a blob (image data)
+    // For now, assume it returns a URL or we handle the blob.
+    // Handling blobs in Next.js routes usually involves returning them as a response
+    // or uploading them to storage and returning the URL.
+    
+    // For simplicity in this stronger prototype:
+    const blob = await response.blob();
+    // In a real app, you'd upload this blob to Firebase Storage here.
+    console.log("Processing result image size:", blob.size);
+    
+    return NextResponse.json({ result: targetImageUrl, message: "HF API call successful (mocked blob handling)" });
+  } catch (error: unknown) {
     console.error("Try-on API Error:", error);
-    return NextResponse.json({ error: 'Failed to process try-on' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Failed to process try-on';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
