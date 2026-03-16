@@ -22,6 +22,19 @@ export default function Home() {
     return () => unsubscribe();
   }, [router]);
 
+  if (!auth) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-white p-6 text-center">
+        <h1 className="text-2xl font-bold mb-4">Configuration Required</h1>
+        <p className="text-gray-500 mb-6">Please add your Firebase environment variables to Vercel or `.env.local` to start using Mirro.</p>
+        <div className="bg-gray-100 p-4 rounded-xl text-xs font-mono text-left w-full max-w-md">
+          NEXT_PUBLIC_FIREBASE_API_KEY=...<br/>
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-white">

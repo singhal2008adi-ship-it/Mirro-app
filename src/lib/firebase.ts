@@ -12,16 +12,22 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-// Defensive check to prevent build-time crashes when env vars are missing
 const isConfigValid = !!firebaseConfig.apiKey;
 
-let app;
+let app = null;
+let auth = null;
+let db = null;
+let storage = null;
+
 if (isConfigValid) {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+  try {
+    app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
+  } catch (error) {
+    console.error("Firebase initialization failed:", error);
+  }
 }
 
-const auth = app ? getAuth(app) : ({} as any);
-const db = app ? getFirestore(app) : ({} as any);
-const storage = app ? getStorage(app) : ({} as any);
-
-export { app, auth, db, storage };
+export { app, auth, db, storage, isConfigValid as isFirebaseEnabled };

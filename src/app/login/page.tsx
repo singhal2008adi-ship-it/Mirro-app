@@ -11,6 +11,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         router.push("/");
@@ -22,6 +26,7 @@ export default function LoginPage() {
   }, [router]);
 
   const handleGoogleLogin = async () => {
+    if (!auth) return;
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
@@ -48,6 +53,23 @@ export default function LoginPage() {
       icon: <ShoppingBag className="w-12 h-12 text-black mb-6" />,
     },
   ];
+
+  if (!auth) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-white p-6 text-center">
+        <h1 className="text-2xl font-bold mb-4 text-black font-sans tracking-tight">Configuration Required</h1>
+        <p className="text-gray-400 mb-8 font-medium max-w-xs">To launch Mirro, please configure your Firebase environment variables in the Vercel Dashboard.</p>
+        <div className="bg-gray-50 p-6 rounded-[2rem] text-xs font-mono text-left w-full max-w-sm border border-gray-100/50 shadow-sm">
+          <p className="text-gray-400 mb-2 uppercase tracking-widest font-bold">Required Keys:</p>
+          <code className="text-black block overflow-x-auto whitespace-pre">
+            NEXT_PUBLIC_FIREBASE_API_KEY<br/>
+            NEXT_PUBLIC_FIREBASE_PROJECT_ID<br/>
+            ...
+          </code>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
