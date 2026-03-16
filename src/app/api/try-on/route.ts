@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     console.log("Calling HF Try-On API with base:", basePhotoUrl, "and target:", targetImageUrl);
 
     const response = await fetch(
-      "https://router.huggingface.co/models/yisol/IDM-VTON",
+      "https://router.huggingface.co/hf-inference/models/yisol/IDM-VTON",
       {
         headers: { Authorization: `Bearer ${hfToken}`, "Content-Type": "application/json" },
         method: "POST",
@@ -40,8 +40,15 @@ export async function POST(req: Request) {
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to process try-on via HF API");
+      const errorText = await response.text();
+      let errorMessage = "Failed to process try-on via HF API";
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.error || errorMessage;
+      } catch (e) {
+        errorMessage = `${errorMessage}: ${errorText}`;
+      }
+      throw new Error(errorMessage);
     }
 
     // In a real scenario, this might return a blob (image data)
