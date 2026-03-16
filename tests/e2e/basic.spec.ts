@@ -8,6 +8,10 @@ test.describe('Mirro PWA Basic Flows', () => {
     
     // Step 0: Upload Your Photo
     await expect(page.locator('text=Upload Your Photo')).toBeVisible();
+    
+    // Capture screenshot of the first onboarding screen
+    await page.screenshot({ path: 'screenshots/onboarding-step-0.png' });
+    
     await page.click('button:has-text("Next")');
 
     // Step 1: Pick Any Style
@@ -17,14 +21,15 @@ test.describe('Mirro PWA Basic Flows', () => {
     // Step 2: Smart Shopping
     await expect(page.locator('text=Smart Shopping')).toBeVisible();
     await expect(page.locator('text=Continue with Google')).toBeVisible();
+    
+    // Capture screenshot of the final onboarding screen
+    await page.screenshot({ path: 'screenshots/login-screen.png' });
   });
 
   test('should check API status (Gemini)', async ({ request }) => {
-    // The gemini route likely requires a body, testing basic accessibility
     const response = await request.post('/api/gemini', {
       data: { text: 'Hello' }
     });
-    // We expect 200 now that keys are present, or at least not 500
     expect(response.status()).toBeLessThan(500);
   });
 
