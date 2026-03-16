@@ -9,6 +9,7 @@ export default function LoginPage() {
   const [step, setStep] = useState(0);
   const router = useRouter();
   const [loading, setLoading] = useState(!!auth);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!auth) return;
@@ -24,12 +25,18 @@ export default function LoginPage() {
 
   const handleGoogleLogin = async () => {
     if (!auth) return;
+    setError(null);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
       router.push("/");
-    } catch (error) {
-      console.error("Login failed:", error);
+    } catch (err: any) {
+      console.error("Login failed:", err);
+      if (err.code === "auth/unauthorized-domain") {
+        setError("Domain not authorized. Please add this Vercel domain to Firebase Console -> Authentication -> Settings -> Authorized Domains.");
+      } else {
+        setError(err.message || "Failed to sign in with Google.");
+      }
     }
   };
 
@@ -113,6 +120,12 @@ export default function LoginPage() {
           </button>
         ) : (
           <div className="space-y-4 animate-in slide-in-from-bottom-4 duration-500">
+            {error && (
+              <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm text-left border border-red-100">
+                <span className="font-bold block mb-1">Sign-in Error:</span>
+                {error}
+              </div>
+            )}
             <button
               onClick={handleGoogleLogin}
               className="w-full bg-black text-white py-4 rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 hover:bg-gray-800 transition-colors shadow-lg shadow-black/10"
