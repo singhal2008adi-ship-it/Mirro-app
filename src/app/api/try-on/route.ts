@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     console.log("Calling HF Try-On API with base:", basePhotoUrl, "and target:", targetImageUrl);
 
     const response = await fetch(
-      "https://api-inference.huggingface.co/models/yisol/IDM-VTON",
+      "https://router.huggingface.co/models/yisol/IDM-VTON",
       {
         headers: { Authorization: `Bearer ${hfToken}`, "Content-Type": "application/json" },
         method: "POST",
