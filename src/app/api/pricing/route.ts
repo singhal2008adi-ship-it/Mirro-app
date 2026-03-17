@@ -121,11 +121,11 @@ function buildFallbackPrices(basePrice: number, sourceUrl: string, searchTitle: 
   const platform = (url: string, domain: string) => sourceUrl.includes(domain) ? sourceUrl : '';
 
   return [
-    { platform: 'Myntra',    price: basePrice,                    url: platform(sourceUrl, 'myntra') || `https://www.myntra.com/${q}`,                        isBest: false, isFromSearch: false },
-    { platform: 'Flipkart',  price: Math.round(basePrice * 0.95), url: platform(sourceUrl, 'flipkart') || `https://www.flipkart.com/search?q=${q}`,           isBest: false, isFromSearch: false },
-    { platform: 'Amazon',    price: Math.round(basePrice * 1.08), url: platform(sourceUrl, 'amazon') || `https://www.amazon.in/s?k=${q}`,                     isBest: false, isFromSearch: false },
-    { platform: 'Ajio',      price: Math.round(basePrice * 1.04), url: platform(sourceUrl, 'ajio') || `https://www.ajio.com/search/?text=${q}`,               isBest: false, isFromSearch: false },
-    { platform: 'Tata CLiQ', price: Math.round(basePrice * 1.12), url: `https://www.tatacliq.com/search/?searchCategory=all&text=${q}`,                      isBest: false, isFromSearch: false },
+    { platform: 'Myntra',    title: searchTitle, price: basePrice,                    url: platform(sourceUrl, 'myntra') || `https://www.myntra.com/${q}`,                        isBest: false, isFromSearch: false },
+    { platform: 'Flipkart',  title: searchTitle, price: Math.round(basePrice * 0.95), url: platform(sourceUrl, 'flipkart') || `https://www.flipkart.com/search?q=${q}`,           isBest: false, isFromSearch: false },
+    { platform: 'Amazon',    title: searchTitle, price: Math.round(basePrice * 1.08), url: platform(sourceUrl, 'amazon') || `https://www.amazon.in/s?k=${q}`,                     isBest: false, isFromSearch: false },
+    { platform: 'Ajio',      title: searchTitle, price: Math.round(basePrice * 1.04), url: platform(sourceUrl, 'ajio') || `https://www.ajio.com/search/?text=${q}`,               isBest: false, isFromSearch: false },
+    { platform: 'Tata CLiQ', title: searchTitle, price: Math.round(basePrice * 1.12), url: `https://www.tatacliq.com/search/?searchCategory=all&text=${q}`,                      isBest: false, isFromSearch: false },
   ];
 }
 
