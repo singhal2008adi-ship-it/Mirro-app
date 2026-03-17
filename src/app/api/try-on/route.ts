@@ -68,12 +68,13 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- FALLBACK: Garment Preview ---
+    // --- FALLBACK: User Photo ---
+    // Instead of showing the garment (which caused a broken image icon), show the user's original photo
     return NextResponse.json({ 
-      result: targetImageUrl, 
+      result: basePhotoUrl, 
       isFallback: true,
       engine: "None",
-      message: "AI models are currently warming up. Showing high-quality garment preview." 
+      message: "AI models are currently warming up. Showing your original photo as fallback." 
     });
   } catch (error: unknown) {
     console.error("Try-on API Error:", error);

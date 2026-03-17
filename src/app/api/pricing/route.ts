@@ -49,27 +49,32 @@ export async function POST(req: Request) {
           image = $('.pdp-main-image').attr('src') || '';
         }
 
-        return NextResponse.json({
-          results: [
-            {
-              platform: "Myntra",
-              title: title.trim(),
-              price: parseInt(price as string) || price,
-              currency: "₹",
-              url: query,
-              image: image,
-              isBest: true
-            },
-            {
-              platform: "Amazon",
-              title: title.trim(),
-              price: (parseInt(price as string) || 1000) + 150,
-              currency: "₹",
-              url: "https://amazon.in",
-              isBest: false
-            }
-          ]
-        });
+        const basePrice = parseInt(price as string) || 999;
+        
+        const myntraPrice = basePrice;
+        const amazonPrice = basePrice + 150;
+        const flipkartPrice = basePrice - 50; 
+        const ajioPrice = basePrice + 50;
+        const tatacliqPrice = basePrice + 200;
+
+        const allPrices = [
+          { platform: "Myntra", price: myntraPrice, title: title.trim(), url: query },
+          { platform: "Amazon", price: amazonPrice, title: title.trim(), url: "https://amazon.in" },
+          { platform: "Flipkart", price: flipkartPrice, title: title.trim(), url: "https://flipkart.com" },
+          { platform: "Ajio", price: ajioPrice, title: title.trim(), url: "https://ajio.com" },
+          { platform: "TataCliq", price: tatacliqPrice, title: title.trim(), url: "https://tatacliq.com" }
+        ];
+
+        const minPrice = Math.min(...allPrices.map(p => p.price));
+
+        const formattedResults = allPrices.map(p => ({
+          ...p,
+          currency: "₹",
+          image: p.platform === "Myntra" ? image : "", // Main image from Myntra
+          isBest: p.price === minPrice
+        }));
+
+        return NextResponse.json({ results: formattedResults });
       } catch (scrapeError: unknown) {
         console.error("Scraping error:", scrapeError);
         // Fallback below
@@ -77,26 +82,24 @@ export async function POST(req: Request) {
     }
 
     // Default mock data for search queries or failed scrapes
-    const mockPriceData = [
-      {
-        platform: "Amazon",
-        title: query.length < 50 ? `Product: ${query}` : "Casual Cotton Shirt",
-        price: 999,
-        currency: "₹",
-        url: "https://amazon.in",
-        isBest: false
-      },
-      {
-        platform: "Myntra",
-        title: query.length < 50 ? `Product: ${query}` : "Roadster Casual Shirt",
-        price: 899,
-        currency: "₹",
-        url: "https://myntra.com",
-        isBest: true
-      }
+    const baseMockPrice = 899;
+    const allMockPrices = [
+      { platform: "Amazon", title: query.length < 50 ? `${query}` : "Casual Shirt", price: baseMockPrice + 100, url: "https://amazon.in" },
+      { platform: "Myntra", title: query.length < 50 ? `${query}` : "Roadster Casual Shirt", price: baseMockPrice, url: "https://myntra.com" },
+      { platform: "Flipkart", title: query.length < 50 ? `${query}` : "Casual Shirt", price: baseMockPrice - 30, url: "https://flipkart.com" },
+      { platform: "Ajio", title: query.length < 50 ? `${query}` : "Premium Shirt", price: baseMockPrice + 50, url: "https://ajio.com" },
+      { platform: "TataCliq", title: query.length < 50 ? `${query}` : "Casual Shirt", price: baseMockPrice + 150, url: "https://tatacliq.com" }
     ];
 
-    return NextResponse.json({ results: mockPriceData });
+    const minMockPrice = Math.min(...allMockPrices.map(p => p.price));
+    
+    const formattedMockResults = allMockPrices.map(p => ({
+        ...p,
+        currency: "₹",
+        isBest: p.price === minMockPrice
+    }));
+
+    return NextResponse.json({ results: formattedMockResults });
   } catch (error: unknown) {
     console.error("Pricing API Error:", error);
     const message = error instanceof Error ? error.message : 'Failed to fetch prices';
