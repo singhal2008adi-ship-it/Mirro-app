@@ -20,6 +20,7 @@ export default function MagicMirror() {
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [isFallback, setIsFallback] = useState(false);
+  const [engine, setEngine] = useState<string | null>(null);
   const [priceData, setPriceData] = useState<PriceItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
@@ -49,6 +50,7 @@ export default function MagicMirror() {
     setError(null);
     setResultImage(null);
     setResultMessage(null);
+    setEngine(null);
     setIsFallback(false);
     setPriceData([]);
 
@@ -69,6 +71,7 @@ export default function MagicMirror() {
       setResultImage(tryOnData.result);
       setResultMessage(tryOnData.message);
       setIsFallback(tryOnData.isFallback);
+      setEngine(tryOnData.engine);
 
       // 2. Call Pricing API (if it's a link or we have metadata)
       const pricingResp = await fetch("/api/pricing", {
@@ -104,9 +107,9 @@ export default function MagicMirror() {
             <div className="absolute top-6 left-6 bg-white/20 backdrop-blur-md px-4 py-2 rounded-full border border-white/30">
               <span className="text-white text-xs font-bold tracking-widest uppercase flex items-center gap-2">
                 {isFallback ? (
-                  <>Preview Only - AI Model Busy</>
+                  <>Preview Only - {engine || "AI Model Busy"}</>
                 ) : (
-                  <><Sparkles className="w-3 h-3" /> Magic Mirror Result</>
+                  <><Sparkles className="w-3 h-3" /> {engine || "Magic Mirror"} Result</>
                 )}
               </span>
             </div>
