@@ -21,7 +21,7 @@ export async function POST(req: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     const prompt = "Analyze this clothing item and provide a brief description, its category (e.g., Top, Bottom, Outerwear, Accessory), its primary color, and its material. Return the response as a JSON object with keys: description, category, color, material.";
 
