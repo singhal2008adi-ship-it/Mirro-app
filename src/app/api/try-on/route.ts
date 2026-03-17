@@ -11,8 +11,11 @@ export async function POST(req: Request) {
     }
 
     // Helper: extract the raw base64 bytes + mime type from a data URL
-    const parseDataUrl = (dataUrl: string) => {
-      const match = dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/s);
+    const parseDataUrl = (dataUrl: string | null) => {
+      if (!dataUrl) return null;
+      const trimmed = dataUrl.trim();
+      // Using [\s\S] instead of . with /s flag for maximum compatibility
+      const match = trimmed.match(/^data:([^;]+);base64,([\s\S]+)$/);
       if (!match) return null;
       return { mimeType: match[1], data: match[2] };
     };
@@ -20,12 +23,23 @@ export async function POST(req: Request) {
     const baseImg = parseDataUrl(basePhotoData);
     const garmentImg = parseDataUrl(garmentImageData);
 
-    if (!baseImg || !garmentImg) {
+    if (!baseImg) {
+      console.error("[Try-On] Base image parsing failed. Prefix:", basePhotoData?.slice(0, 50));
       return NextResponse.json({
         result: basePhotoData,
         isFallback: true,
         engine: "Fallback",
-        message: "Image data could not be parsed. Showing your original photo."
+        message: "Invalid person photo format. Please try another photo."
+      });
+    }
+
+    if (!garmentImg) {
+      console.error("[Try-On] Garment image parsing failed. Prefix:", garmentImageData?.slice(0, 50));
+      return NextResponse.json({
+        result: basePhotoData,
+        isFallback: true,
+        engine: "Fallback",
+        message: "Invalid garment image format. Please try downloading and re-uploading the photo."
       });
     }
 

@@ -29,12 +29,12 @@ async function extractWithGemini(apiKey: string, input: { url?: string; imageBas
       }
 
       // If quick extraction fails, ask Gemini with the raw HTML snippet
-      parts.push({ text: `Extract the product name, brand, and price (in INR) from this product page HTML. Return ONLY a JSON object with keys: title, price, brand.\n\nHTML (first 8000 chars):\n${html.slice(0, 8000)}` });
+      parts.push({ text: `Extract the product name, brand, AND the final discounted selling price (NOT just the MRP) from this product page HTML. Return ONLY a JSON object with keys: title, price, brand. Ensure price is an integer in Indian Rupees.\n\nHTML (first 8000 chars):\n${html.slice(0, 8000)}` });
     } catch {
-      parts.push({ text: `Product link: ${input.url}\nExtract the product name, brand, and likely price in Indian Rupees. Return ONLY JSON: {title, brand, price}` });
+      parts.push({ text: `Product link: ${input.url}\nDetermine the product name, brand, and actual selling price in Indian Rupees. Return ONLY JSON: {title, brand, price}` });
     }
   } else if (input.imageBase64 && input.mimeType) {
-    parts.push({ text: `This is an image of a clothing item. Extract or estimate the product name, brand, and approximate price in Indian Rupees. Return ONLY JSON: {title, brand, price}` });
+    parts.push({ text: `This is an image of a clothing item. Identify the brand if visible, product name, and current approximate selling price in Indian Rupees. Return ONLY JSON: {title, brand, price}` });
     parts.push({ inlineData: { mimeType: input.mimeType, data: input.imageBase64 } });
   }
 
