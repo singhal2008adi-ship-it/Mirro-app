@@ -18,6 +18,8 @@ export default function MagicMirror() {
   const [targetInput, setTargetInput] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [resultImage, setResultImage] = useState<string | null>(null);
+  const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
   const [priceData, setPriceData] = useState<PriceItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
@@ -46,6 +48,8 @@ export default function MagicMirror() {
     setIsProcessing(true);
     setError(null);
     setResultImage(null);
+    setResultMessage(null);
+    setIsFallback(false);
     setPriceData([]);
 
     try {
@@ -63,6 +67,8 @@ export default function MagicMirror() {
       if (!tryOnResp.ok) throw new Error(tryOnData.error || "Try-on failed");
       
       setResultImage(tryOnData.result);
+      setResultMessage(tryOnData.message);
+      setIsFallback(tryOnData.isFallback);
 
       // 2. Call Pricing API (if it's a link or we have metadata)
       const pricingResp = await fetch("/api/pricing", {
@@ -95,17 +101,28 @@ export default function MagicMirror() {
         <section className="bg-black rounded-[2.5rem] p-2 shadow-2xl overflow-hidden relative aspect-[3/4]">
            {/* eslint-disable-next-line @next/next/no-img-element */}
            <img src={resultImage} alt="Magic Mirror Result" className="w-full h-full object-cover rounded-[2.2rem]" />
-           <div className="absolute top-6 left-6 bg-white/20 backdrop-blur-md px-4 py-2 rounded-full border border-white/30">
-             <span className="text-white text-xs font-bold tracking-widest uppercase flex items-center gap-2">
-               <Sparkles className="w-3 h-3" /> Magic Mirror Result
-             </span>
-           </div>
-           <button 
-             onClick={() => setResultImage(null)}
-             className="absolute bottom-6 right-6 bg-white text-black p-4 rounded-full shadow-lg hover:scale-105 transition-transform"
-           >
-             <RefreshCw className="w-6 h-6" />
-           </button>
+            <div className="absolute top-6 left-6 bg-white/20 backdrop-blur-md px-4 py-2 rounded-full border border-white/30">
+              <span className="text-white text-xs font-bold tracking-widest uppercase flex items-center gap-2">
+                {isFallback ? (
+                  <>Preview Only - AI Model Busy</>
+                ) : (
+                  <><Sparkles className="w-3 h-3" /> Magic Mirror Result</>
+                )}
+              </span>
+            </div>
+            {resultMessage && (
+              <div className="absolute bottom-24 left-6 right-6 bg-black/60 backdrop-blur-md p-4 rounded-2xl border border-white/10">
+                <p className="text-white/80 text-[10px] leading-tight italic">
+                  {resultMessage}
+                </p>
+              </div>
+            )}
+            <button 
+              onClick={() => setResultImage(null)}
+              className="absolute bottom-6 right-6 bg-white text-black p-4 rounded-full shadow-lg hover:scale-105 transition-transform"
+            >
+              <RefreshCw className="w-6 h-6" />
+            </button>
         </section>
 
         {priceData.length > 0 && <CheckoutHub items={priceData} />}
