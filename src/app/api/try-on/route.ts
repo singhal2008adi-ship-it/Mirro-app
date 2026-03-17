@@ -14,31 +14,19 @@ export async function POST(req: Request) {
     const parseDataUrl = (dataUrl: string | null) => {
       if (!dataUrl) return null;
       const trimmed = dataUrl.trim();
-      // Using [\s\S] instead of . with /s flag for maximum compatibility
       const match = trimmed.match(/^data:([^;]+);base64,([\s\S]+)$/);
       if (!match) return null;
-      return { mimeType: match[1], data: match[2] };
+      return { mimeType: match[1], data: match[2].trim() };
     };
 
     const baseImg = parseDataUrl(basePhotoData);
     const garmentImg = parseDataUrl(garmentImageData);
 
     if (!baseImg) {
-      return NextResponse.json({
-        result: basePhotoData,
-        isFallback: true,
-        engine: "Fallback",
-        message: "Invalid person photo format."
-      });
+      return NextResponse.json({ result: basePhotoData, isFallback: true, engine: "Fallback", message: "Invalid person photo format." });
     }
-
     if (!garmentImg) {
-      return NextResponse.json({
-        result: basePhotoData,
-        isFallback: true,
-        engine: "Fallback",
-        message: "Invalid garment image format."
-      });
+      return NextResponse.json({ result: basePhotoData, isFallback: true, engine: "Fallback", message: "Invalid garment image format." });
     }
 
     // ───── ENGINE A: Hugging Face IDM-VTON (Specialized Try-On) ─────
@@ -63,7 +51,6 @@ export async function POST(req: Request) {
             signal: AbortSignal.timeout(35000)
           }
         );
-
         if (hfResp.ok) {
           const contentType = hfResp.headers.get("content-type") || "image/png";
           const buf = await hfResp.arrayBuffer();
@@ -81,12 +68,12 @@ export async function POST(req: Request) {
       }
     }
 
-    // ───── ENGINE B: Imagen 4 (AI Combined Generation) ─────
-    // This uses Gemini to describe the person + garment, then Imagen to generate the "combined" photo
+    // ───── ENGINE B: Gemini Image Editing (True Try-On — keeps YOUR face & body) ─────
+    // Two-step: first describe the garment in detail, then edit the user's photo
     if (geminiKey) {
-      console.log("[Try-On] Attempting Imagen 4 Combined Generation...");
+      console.log("[Try-On] Attempting Gemini Image Editing...");
       try {
-        // Step 1: Get description from Gemini
+        // Step 1: describe the garment in precise detail
         const descResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
           {
@@ -95,50 +82,63 @@ export async function POST(req: Request) {
             body: JSON.stringify({
               contents: [{
                 parts: [
-                  { text: "Analyze these two photos. Photo 1 is a person. Photo 2 is a clothing item. Output a single detailed prompt for an image generator (like Imagen) to create a high-quality professional photo of THIS person wearing THIS clothing item. Describe the person (hair, ethnicity, build) and the garment in detail. Keep it positive and fashion-focused." },
-                  { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } },
+                  { text: "Describe this clothing item for an image editor in one sentence: include the exact color, fabric texture, style (e.g. button-down, polo, t-shirt), fit, collar type, and any visible details like pocket or embroidery. Be very specific." },
                   { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
                 ]
               }]
             }),
-            signal: AbortSignal.timeout(15000)
+            signal: AbortSignal.timeout(12000)
           }
         );
 
+        let garmentDescription = "a casual shirt";
         if (descResp.ok) {
           const descData = await descResp.json();
-          const prompt = descData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "A high quality fashion photo of a person wearing this outfit.";
-
-          // Step 2: Generate image with Imagen 4
-          const imagenResp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${geminiKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                instances: [{ prompt }],
-                parameters: { sampleCount: 1, aspectRatio: "3:4" }
-              }),
-              signal: AbortSignal.timeout(30000)
-            }
-          );
-
-          if (imagenResp.ok) {
-            const imageData = await imagenResp.json();
-            const b64 = imageData.predictions?.[0]?.bytesBase64Encoded;
-            if (b64) {
-              console.log("[Try-On] Imagen 4 success!");
-              return NextResponse.json({
-                result: `data:image/png;base64,${b64}`,
-                engine: "Imagen 4 Re-imagining",
-                isFallback: true,
-                message: "✨ AI Combined Look: We've re-imagined you wearing this outfit using Imagen 4 AI."
-              });
-            }
-          }
+          garmentDescription = descData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || garmentDescription;
+          console.log("[Try-On] Garment desc:", garmentDescription);
         }
-      } catch (imagenErr) {
-        console.warn("[Try-On] Imagen 4 failed:", imagenErr);
+
+        // Step 2: edit the person's actual photo — keep face, body, pose, background; change ONLY the shirt
+        const editPrompt = `Edit this photo: Keep the person's face, hair, body shape, skin tone, pose, and background EXACTLY the same. Replace ONLY the top clothing item (shirt, t-shirt, or top) that the person is wearing with: ${garmentDescription}. Do not change anything else.`;
+
+        const editResp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: editPrompt },
+                  { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } }
+                ]
+              }],
+              generationConfig: { responseModalities: ["IMAGE", "TEXT"] }
+            }),
+            signal: AbortSignal.timeout(35000)
+          }
+        );
+
+        if (editResp.ok) {
+          const editData = await editResp.json();
+          const imgPart = editData.candidates?.[0]?.content?.parts?.find(
+            (p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData
+          );
+          if (imgPart?.inlineData?.data) {
+            console.log("[Try-On] Gemini Image Editing success!");
+            return NextResponse.json({
+              result: `data:${imgPart.inlineData.mimeType || "image/png"};base64,${imgPart.inlineData.data}`,
+              engine: "Gemini Image Edit",
+              isFallback: false,
+              message: `✨ AI Try-On: Your photo with this outfit — ${garmentDescription}`
+            });
+          }
+        } else {
+          const errText = await editResp.text().catch(() => "");
+          console.warn("[Try-On] Gemini edit failed:", editResp.status, errText.slice(0, 200));
+        }
+      } catch (gemEditErr) {
+        console.warn("[Try-On] Gemini image edit error:", gemEditErr);
       }
     }
 
@@ -154,7 +154,7 @@ export async function POST(req: Request) {
             body: JSON.stringify({
               contents: [{
                 parts: [
-                  { text: "In exactly 2 sentences, describe how this clothing item would look on this person. Be positive and specific." },
+                  { text: "In exactly 2 sentences, describe how this exact clothing item would look on this person. Be positive and specific about fit and style." },
                   { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } },
                   { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
                 ]
@@ -163,7 +163,6 @@ export async function POST(req: Request) {
             signal: AbortSignal.timeout(10000)
           }
         );
-
         if (geminiResp.ok) {
           const gemData = await geminiResp.json();
           const note = gemData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
@@ -171,7 +170,9 @@ export async function POST(req: Request) {
             result: basePhotoData,
             engine: "Gemini Stylist",
             isFallback: true,
-            message: note || "AI Engines are busy. Here is your preview."
+            message: note
+              ? `✨ AI Style Analysis: ${note}`
+              : "AI engines are busy. Showing your original photo."
           });
         }
       } catch (gemErr) {
@@ -179,11 +180,12 @@ export async function POST(req: Request) {
       }
     }
 
+    // ───── LAST RESORT FALLBACK ─────
     return NextResponse.json({
       result: basePhotoData,
       engine: "Preview Mode",
       isFallback: true,
-      message: "AI Try-On engines are warming up. Your photo is shown below."
+      message: "AI engines are warming up. Try again in a moment."
     });
 
   } catch (err: unknown) {
