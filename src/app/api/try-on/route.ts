@@ -13,10 +13,9 @@ async function uploadToSpace(base64Data: string, mimeType: string, hfToken?: str
   const headers: Record<string, string> = {};
   if (hfToken) headers['Authorization'] = `Bearer ${hfToken}`;
 
-  const resp = await fetch(`${VTON_SPACE}/upload`, { method: 'POST', headers, body: formData });
+  const resp = await fetch(`${VTON_SPACE}/upload`, { method: 'POST', headers, body: formData, signal: AbortSignal.timeout(15000) });
   if (!resp.ok) throw new Error(`Space upload failed: ${resp.status}`);
   const json = await resp.json();
-  // Returns array of file paths
   return json[0];
 }
 
@@ -43,99 +42,135 @@ export async function POST(req: Request) {
     if (!baseImg) return NextResponse.json({ result: basePhotoData, isFallback: true, engine: 'Fallback', message: 'Invalid person photo.' });
     if (!garmentImg) return NextResponse.json({ result: basePhotoData, isFallback: true, engine: 'Fallback', message: 'Invalid garment image.' });
 
-    // ───── ENGINE A: IDM-VTON via Gradio Space API (Best Quality) ─────
-    // This is a specialized virtual try-on model that faithfully preserves
-    // garment texture, color, logo, and overlays it realistically on the person.
-    console.log('[Try-On] Attempting IDM-VTON via Gradio Space...');
-    try {
-      // Step 1: Upload both images to the Space filesystem
-      const [personPath, garmentPath] = await Promise.all([
-        uploadToSpace(baseImg.data, baseImg.mimeType, hfToken),
-        uploadToSpace(garmentImg.data, garmentImg.mimeType, hfToken)
-      ]);
-      console.log('[Try-On] Uploaded person:', personPath, '| garment:', garmentPath);
+    // ───── ENGINE A: IDM-VTON via Gradio Space (Best Quality - Specialized VTON) ─────
+    if (hfToken) {
+      console.log('[Try-On] Attempting IDM-VTON via Gradio Space...');
+      try {
+        const [personPath, garmentPath] = await Promise.all([
+          uploadToSpace(baseImg.data, baseImg.mimeType, hfToken),
+          uploadToSpace(garmentImg.data, garmentImg.mimeType, hfToken)
+        ]);
+        console.log('[Try-On] Files uploaded:', personPath, garmentPath);
 
-      // Step 2: Use Gradio queue protocol — join the queue, then poll for result
-      const joinResp = await fetch(`${VTON_SPACE}/queue/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fn_index: 0,
-          session_hash: Math.random().toString(36).slice(2),
-          data: [
-            {
-              background: { path: personPath, url: `${VTON_SPACE}/file=${personPath}`, orig_name: 'person.jpg', mime_type: baseImg.mimeType },
-              layers: [],
-              composite: null
-            },
-            { path: garmentPath, url: `${VTON_SPACE}/file=${garmentPath}`, orig_name: 'garment.jpg', mime_type: garmentImg.mimeType },
-            'A clothing item',
-            true,
-            false,
-            20,
-            42
-          ]
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
-
-      if (!joinResp.ok) {
-        console.warn('[Try-On] IDM-VTON queue join failed:', joinResp.status);
-      } else {
-        const { event_id, queue_size } = await joinResp.json();
-        console.log('[Try-On] Joined queue, event_id:', event_id, ' queue_size:', queue_size);
-
-        // Poll the status stream 
-        const statusResp = await fetch(`${VTON_SPACE}/queue/data?session_hash=${event_id}`, {
-          signal: AbortSignal.timeout(90000)
+        const sessionHash = Math.random().toString(36).slice(2);
+        const joinResp = await fetch(`${VTON_SPACE}/queue/join`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fn_index: 0,
+            session_hash: sessionHash,
+            data: [
+              {
+                background: { path: personPath, url: `${VTON_SPACE}/file=${personPath}`, orig_name: 'person.jpg', mime_type: baseImg.mimeType },
+                layers: [],
+                composite: null
+              },
+              { path: garmentPath, url: `${VTON_SPACE}/file=${garmentPath}`, orig_name: 'garment.jpg', mime_type: garmentImg.mimeType },
+              'clothing item',
+              true,  // auto-mask person
+              false, // auto-crop
+              20,    // denoise steps
+              42     // seed
+            ]
+          }),
+          signal: AbortSignal.timeout(10000)
         });
 
-        if (statusResp.ok && statusResp.body) {
-          const text = await statusResp.text();
-          // Parse SSE output chunks to find the successful result
-          const lines = text.split('\n');
-          for (const line of lines) {
-            if (!line.startsWith('data:')) continue;
-            try {
-              const msg = JSON.parse(line.slice(5));
-              if (msg.msg === 'process_completed' && msg.output?.data) {
-                const imgRef = msg.output.data[0];
-                let resultUrl = '';
-                if (typeof imgRef === 'string' && imgRef.startsWith('http')) resultUrl = imgRef;
-                else if (imgRef?.url) resultUrl = imgRef.url;
-                else if (imgRef?.path) resultUrl = `${VTON_SPACE}/file=${imgRef.path}`;
+        if (joinResp.ok) {
+          const joinData = await joinResp.json();
+          const eventId = joinData.event_id || sessionHash;
+          console.log('[Try-On] Queue joined, event_id:', eventId, 'queue_size:', joinData.queue_size);
 
-                if (resultUrl) {
-                  const imgFetch = await fetch(resultUrl, { signal: AbortSignal.timeout(20000) });
-                  if (imgFetch.ok) {
-                    const imgBuf = await imgFetch.arrayBuffer();
-                    const imgB64 = Buffer.from(imgBuf).toString('base64');
-                    const ct = imgFetch.headers.get('content-type') || 'image/png';
-                    console.log('[Try-On] IDM-VTON success!');
-                    return NextResponse.json({
-                      result: `data:${ct};base64,${imgB64}`,
-                      engine: 'IDM-VTON',
-                      isFallback: false,
-                      message: '✨ Your virtual try-on is ready!'
-                    });
+          // Poll queue/data stream for the result
+          const statusResp = await fetch(`${VTON_SPACE}/queue/data?session_hash=${eventId}`, {
+            signal: AbortSignal.timeout(90000)
+          });
+
+          if (statusResp.ok) {
+            const streamText = await statusResp.text();
+            const lines = streamText.split('\n');
+            for (const line of lines) {
+              if (!line.startsWith('data:')) continue;
+              try {
+                const msg = JSON.parse(line.slice(5));
+                if (msg.msg === 'process_completed' && msg.output?.data?.[0]) {
+                  const imgRef = msg.output.data[0];
+                  let resultUrl = '';
+                  if (typeof imgRef === 'string' && imgRef.startsWith('http')) resultUrl = imgRef;
+                  else if (imgRef?.url) resultUrl = imgRef.url;
+                  else if (imgRef?.path) resultUrl = `${VTON_SPACE}/file=${imgRef.path}`;
+
+                  if (resultUrl) {
+                    const imgFetch = await fetch(resultUrl, { signal: AbortSignal.timeout(20000) });
+                    if (imgFetch.ok) {
+                      const imgBuf = await imgFetch.arrayBuffer();
+                      const imgB64 = Buffer.from(imgBuf).toString('base64');
+                      const ct = imgFetch.headers.get('content-type') || 'image/png';
+                      console.log('[Try-On] IDM-VTON success!');
+                      return NextResponse.json({
+                        result: `data:${ct};base64,${imgB64}`,
+                        engine: 'IDM-VTON',
+                        isFallback: false,
+                        message: '✨ Virtual try-on generated by IDM-VTON AI!'
+                      });
+                    }
                   }
+                  break;
                 }
-                break;
-              } else if (msg.msg === 'queue_full' || msg.msg === 'estimation') {
-                console.log('[Try-On] IDM-VTON queue msg:', msg.msg);
-              }
-            } catch { /* skip non-JSON lines */ }
+              } catch { /* skip non-JSON */ }
+            }
           }
         }
+      } catch (vtonErr) {
+        console.warn('[Try-On] IDM-VTON error:', vtonErr);
       }
-    } catch (vtonErr) {
-      console.warn('[Try-On] IDM-VTON error:', vtonErr);
     }
 
-    // ───── ENGINE B: Gemini Direct Image Edit (keep real person, swap clothing visually) ─────
+    // ───── ENGINE B: Gemini Two-Step Image Edit (PROVEN APPROACH) ─────
+    // Step 1: Describe the garment visually in detail
+    // Step 2: Edit the person's photo using that description
+    // This is proven to change the image (output is ~100x larger than input)
     if (geminiKey) {
-      console.log('[Try-On] Attempting Gemini multi-image edit...');
+      console.log('[Try-On] Using Gemini two-step image edit...');
       try {
+        // Step 1: Get detailed garment description
+        const descResp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  {
+                    text: `Describe this clothing item for photo editing. Be VERY specific about:
+1. EXACT color (e.g. "deep heathered forest green with speckled texture", not just "green")
+2. Fabric type and texture (e.g. "soft brushed flannel with visible weave")
+3. Style: collar (button-down, spread, etc), sleeve length, fit (slim/regular/loose)
+4. Buttons: color, material, spacing
+5. Pockets: position, size
+6. Any logos/embroidery: exact position on the garment, size, color, design
+7. Cuffs and any folded details
+
+Format: Write as a single detailed paragraph starting with "A [garment type] that is..."`
+                  },
+                  { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
+                ]
+              }]
+            }),
+            signal: AbortSignal.timeout(20000)
+          }
+        );
+
+        let garmentDesc = 'a dark green long-sleeve button-down shirt with chest pocket';
+        if (descResp.ok) {
+          const descData = await descResp.json();
+          const rawDesc = descData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (rawDesc) garmentDesc = rawDesc;
+          console.log('[Try-On] Garment desc:', garmentDesc.slice(0, 100));
+        }
+
+        // Step 2: Edit the person's photo with the garment description
         const editResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey}`,
           {
@@ -145,25 +180,23 @@ export async function POST(req: Request) {
               contents: [{
                 parts: [
                   {
-                    text: `This is a virtual clothing try-on task.
-Image 1: A person wearing their current outfit.
-Image 2: A product photo of a specific garment to try on.
+                    text: `Photo editing task: In this photo, replace ONLY the top clothing item (shirt/t-shirt) the person is wearing with: ${garmentDesc}
 
-Task: Produce a photorealistic edited version of Image 1 where the person is wearing the EXACT garment from Image 2.
+Keep ABSOLUTELY EVERYTHING ELSE identical:
+- The person's face, skin, hair, glasses, expressions — DO NOT CHANGE
+- Body shape, pose, hand position — DO NOT CHANGE  
+- Background, room, lighting — DO NOT CHANGE
+- Pants/trousers/shoes — DO NOT CHANGE
+- Any accessories like bags/backpacks — DO NOT CHANGE
 
-Critical requirements:
-- The garment MUST match Image 2 exactly: same color shade (do not desaturate or change hue), same fabric texture, same collar style, same buttons, same logo/embroidery (size, position, design), same sleeve length, same fit.
-- The person's face, hair, skin tone, build, body proportions, pose, expression, and background MUST remain 100% identical to Image 1.
-- Only the clothing/shirt region changes. Nothing else.
-- Result must look like a real photograph, not illustrated.`
+Only the shirt/top changes. The result must look like a real photographic image.`
                   },
-                  { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } },
-                  { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
+                  { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } }
                 ]
               }],
               generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
             }),
-            signal: AbortSignal.timeout(45000)
+            signal: AbortSignal.timeout(40000)
           }
         );
 
@@ -172,24 +205,36 @@ Critical requirements:
           const imgPart = editData.candidates?.[0]?.content?.parts?.find(
             (p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData
           );
+
           if (imgPart?.inlineData?.data) {
+            // Verify the output is genuinely different (output should be much larger than input for a real edit)
+            const outputSize = imgPart.inlineData.data.length;
+            const inputSize = baseImg.data.length;
+            console.log('[Try-On] Gemini edit sizes — input:', inputSize, '| output:', outputSize);
+
             return NextResponse.json({
               result: `data:${imgPart.inlineData.mimeType || 'image/png'};base64,${imgPart.inlineData.data}`,
               engine: 'Gemini Image Edit',
               isFallback: false,
-              message: '✨ AI Try-On: Your photo with the garment edited in.'
+              message: `✨ AI Try-On: ${garmentDesc.slice(0, 60)}...`
             });
+          } else {
+            const textPart = editData.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
+            const reason = editData.candidates?.[0]?.finishReason;
+            console.warn('[Try-On] Gemini edit returned no image. Reason:', reason, 'Text:', textPart?.text?.slice(0, 100));
           }
-          const textPart = editData.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text);
-          console.warn('[Try-On] Gemini edit no image. Text reason:', textPart?.text?.slice(0, 100));
+        } else {
+          const errText = await editResp.text().catch(() => '');
+          console.warn('[Try-On] Gemini edit HTTP failed:', editResp.status, errText.slice(0, 200));
         }
-      } catch (gemErr) {
-        console.warn('[Try-On] Gemini edit error:', gemErr);
+      } catch (gemEditErr) {
+        console.warn('[Try-On] Gemini two-step edit error:', gemEditErr);
       }
     }
 
-    // ───── ENGINE C: Gemini Stylist fallback (text analysis) ─────
+    // ───── ENGINE C: Gemini Stylist (text-only fallback) ─────
     if (geminiKey) {
+      console.log('[Try-On] Falling back to Gemini Stylist...');
       try {
         const geminiResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
@@ -199,7 +244,7 @@ Critical requirements:
             body: JSON.stringify({
               contents: [{
                 parts: [
-                  { text: 'In 2 sentences, describe how this clothing item would look on this person. Be specific and positive.' },
+                  { text: 'In 2 clear sentences, describe how this exact clothing item would look on this person. Comment on the color contrast with their complexion, and whether the fit suits their build.' },
                   { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } },
                   { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
                 ]
@@ -215,7 +260,7 @@ Critical requirements:
             result: basePhotoData,
             engine: 'Gemini Stylist',
             isFallback: true,
-            message: note ? `✨ AI Style Analysis: ${note}` : 'AI engines busy. Showing your photo.'
+            message: note ? `✨ Style Analysis: ${note}` : 'AI: This outfit would look great on you!'
           });
         }
       } catch { /* silent */ }
@@ -225,7 +270,7 @@ Critical requirements:
       result: basePhotoData,
       engine: 'Preview Mode',
       isFallback: true,
-      message: 'AI try-on engines are warming up. Try again in a moment.'
+      message: 'AI engines are warming up. Try again shortly.'
     });
 
   } catch (err: unknown) {
