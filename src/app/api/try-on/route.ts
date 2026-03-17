@@ -2,116 +2,82 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { basePhotoData, targetImageData, targetIsLink } = await req.json();
+    const { basePhotoData, garmentImageData } = await req.json();
     const hfToken = process.env.HF_API_TOKEN;
+    const geminiKey = process.env.GEMINI_API_KEY;
 
-    if (!basePhotoData || !targetImageData) {
-      return NextResponse.json({ error: 'Both base and target images are required' }, { status: 400 });
+    if (!basePhotoData || !garmentImageData) {
+      return NextResponse.json({ error: 'Both person and garment images are required' }, { status: 400 });
     }
 
-    // Helper: extract base64 content from a data URL
-    const extractBase64 = (dataUrl: string) => {
-      const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
-      return match ? { mimeType: match[1], data: match[2] } : null;
+    // Helper: extract the raw base64 bytes + mime type from a data URL
+    const parseDataUrl = (dataUrl: string) => {
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/s);
+      if (!match) return null;
+      return { mimeType: match[1], data: match[2] };
     };
 
-    // Helper: fetch an image from a URL and return base64
-    const fetchImageAsBase64 = async (url: string) => {
-      const resp = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MirroApp/1.0)' }
-      });
-      if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status}`);
-      const buffer = await resp.arrayBuffer();
-      const b64 = Buffer.from(buffer).toString('base64');
-      const contentType = resp.headers.get('content-type') || 'image/jpeg';
-      return { mimeType: contentType, data: b64 };
-    };
+    const baseImg = parseDataUrl(basePhotoData);
+    const garmentImg = parseDataUrl(garmentImageData);
 
-    // Resolve base photo — always should be base64 from client
-    let baseB64: { mimeType: string; data: string } | null = null;
-    if (basePhotoData.startsWith('data:')) {
-      baseB64 = extractBase64(basePhotoData);
-    } else {
-      baseB64 = await fetchImageAsBase64(basePhotoData);
-    }
-
-    // Resolve garment image — may be base64 or a URL
-    let targetB64: { mimeType: string; data: string } | null = null;
-    if (targetIsLink) {
-      // It's a Myntra/product link — try to extract OG image
-      try {
-        const pageResp = await fetch(targetImageData, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MirroApp/1.0)' }
-        });
-        const html = await pageResp.text();
-        const ogMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/);
-        if (ogMatch?.[1]) {
-          targetB64 = await fetchImageAsBase64(ogMatch[1]);
-        }
-      } catch {
-        console.warn('Could not extract product image from link');
-      }
-    } else if (targetImageData.startsWith('data:')) {
-      targetB64 = extractBase64(targetImageData);
-    } else {
-      targetB64 = await fetchImageAsBase64(targetImageData);
-    }
-
-    if (!baseB64 || !targetB64) {
+    if (!baseImg || !garmentImg) {
       return NextResponse.json({
         result: basePhotoData,
         isFallback: true,
         engine: "Fallback",
-        message: "Could not resolve images. Showing your original photo."
+        message: "Image data could not be parsed. Showing your original photo."
       });
     }
 
-    // === ENGINE A: Hugging Face (IDM-VTON — Specialized Virtual Try-On) ===
+    // ───── ENGINE A: Hugging Face IDM-VTON (Specialized Try-On) ─────
     if (hfToken) {
-      console.log("Attempting HF IDM-VTON...");
+      console.log("[Try-On] Attempting Hugging Face IDM-VTON...");
       try {
-        const hfResponse = await fetch(
+        const hfResp = await fetch(
           "https://router.huggingface.co/hf-inference/models/yisol/IDM-VTON",
           {
+            method: "POST",
             headers: {
               Authorization: `Bearer ${hfToken}`,
               "Content-Type": "application/json",
               "x-wait-for-model": "true"
             },
-            method: "POST",
             body: JSON.stringify({
               inputs: {
-                background: `data:${baseB64.mimeType};base64,${baseB64.data}`,
-                garment: `data:${targetB64.mimeType};base64,${targetB64.data}`
+                // Pass inline base64 images directly
+                background: `data:${baseImg.mimeType};base64,${baseImg.data}`,
+                garment: `data:${garmentImg.mimeType};base64,${garmentImg.data}`
               }
             }),
+            signal: AbortSignal.timeout(45000) // 45s timeout
           }
         );
 
-        if (hfResponse.ok) {
-          const contentType = hfResponse.headers.get('content-type') || 'image/png';
-          const buffer = await hfResponse.arrayBuffer();
-          const base64Image = Buffer.from(buffer).toString('base64');
+        if (hfResp.ok) {
+          const contentType = hfResp.headers.get("content-type") || "image/png";
+          const buf = await hfResp.arrayBuffer();
+          const b64 = Buffer.from(buf).toString("base64");
+          console.log("[Try-On] HF success!");
           return NextResponse.json({
-            result: `data:${contentType};base64,${base64Image}`,
-            engine: "Hugging Face (AI Try-On)",
+            result: `data:${contentType};base64,${b64}`,
+            engine: "AI Virtual Try-On",
             isFallback: false,
-            message: "AI Virtual Try-On generated successfully!"
+            message: "Your virtual look has been generated by AI."
           });
         } else {
-          const errText = await hfResponse.text();
-          console.warn(`HF failed (${hfResponse.status}): ${errText}`);
+          const errText = await hfResp.text().catch(() => "");
+          console.warn(`[Try-On] HF failed (${hfResp.status}):`, errText);
         }
-      } catch (hfError) {
-        console.warn("HF Engine error:", hfError);
+      } catch (hfErr) {
+        console.warn("[Try-On] HF engine error:", hfErr);
       }
     }
 
-    // === ENGINE B: Gemini Vision — Composite Try-On ===
-    // Use Gemini to describe the garment and overlay concept
-    const geminiKey = process.env.GEMINI_API_KEY;
+    // ───── ENGINE B: Gemini Vision — Style Analysis Fallback ─────
+    // Since full try-on requires specialized models, Gemini provides a thoughtful
+    // style description overlaid on the user's own photo
     if (geminiKey) {
-      console.log("Attempting Gemini Vision composite...");
+      console.log("[Try-On] Attempting Gemini Vision style analysis...");
       try {
         const geminiResp = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
@@ -122,48 +88,49 @@ export async function POST(req: Request) {
               contents: [{
                 parts: [
                   {
-                    text: `You are a virtual try-on assistant. Analyze these two images: the first is a person's photo, the second is a clothing item. Describe in 1-2 sentences how the person would look wearing this clothing, focusing on fit, style and color combinations.`
+                    text: "You are a personal fashion stylist. I'll show you a person's photo and a clothing item. In exactly 2 sentences, describe how this outfit would look on this person — mention the fit, color contrast, and overall style impression. Be positive and specific."
                   },
-                  {
-                    inlineData: { mimeType: baseB64.mimeType, data: baseB64.data }
-                  },
-                  {
-                    inlineData: { mimeType: targetB64.mimeType, data: targetB64.data }
-                  }
+                  { inlineData: { mimeType: baseImg.mimeType, data: baseImg.data } },
+                  { inlineData: { mimeType: garmentImg.mimeType, data: garmentImg.data } }
                 ]
               }]
-            })
+            }),
+            signal: AbortSignal.timeout(20000)
           }
         );
 
         if (geminiResp.ok) {
-          const geminiData = await geminiResp.json();
-          const description = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          
-          // Return user's base photo with Gemini's style description
+          const gemData = await geminiResp.json();
+          const styleNote = gemData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
+          console.log("[Try-On] Gemini style note:", styleNote);
           return NextResponse.json({
-            result: basePhotoData, // Show the actual person
-            engine: "Gemini AI Preview",
+            result: basePhotoData, // Show person's actual photo
+            engine: "Gemini AI Stylist",
             isFallback: true,
-            message: `✨ AI Style Analysis: ${description}`
+            message: styleNote
+              ? `✨ AI Fashion Analysis: ${styleNote}`
+              : "AI Try-On engines are warming up. Here's your photo — try again in a moment for full virtual try-on."
           });
+        } else {
+          const errText = await geminiResp.text().catch(() => "");
+          console.warn("[Try-On] Gemini failed:", geminiResp.status, errText);
         }
-      } catch (geminiError) {
-        console.warn("Gemini error:", geminiError);
+      } catch (gemErr) {
+        console.warn("[Try-On] Gemini engine error:", gemErr);
       }
     }
 
-    // === FINAL FALLBACK: Show person's photo with message ===
+    // ───── FALLBACK: Show user's photo with message ─────
     return NextResponse.json({
       result: basePhotoData,
-      isFallback: true,
       engine: "Preview Mode",
-      message: "AI engines are warming up (free tier). Your photo is shown. Try again shortly for full try-on."
+      isFallback: true,
+      message: "AI try-on engines are currently warming up (free tier). Your photo is shown. Try again shortly for the full virtual look."
     });
 
-  } catch (error: unknown) {
-    console.error("Try-on API Error:", error);
-    const message = error instanceof Error ? error.message : 'Failed to process try-on';
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err: unknown) {
+    console.error("[Try-On] Unhandled error:", err);
+    const msg = err instanceof Error ? err.message : "Failed to process try-on";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
