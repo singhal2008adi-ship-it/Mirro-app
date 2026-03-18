@@ -93,54 +93,68 @@ export async function POST(req: Request) {
       isFromSearch: false // Not from Google Shopping
     }));
 
-    // ─── Optional: If Serper Key is available, do a Google Shopping Search ──────
-    // The previous implementation used Serper. If the user wants the AI-only
-    // approach to just provide the frontend data, we will return the AI results directly.
-    // However, to keep it robust and identical to the requested logic, we can still fetch Serper
-    // and replace matching AI prices with REAL Google Shopping prices if found.
-    const searchTitle = `${aiResult.product.brand || ''} ${aiResult.product.title}`.trim();
-    if (serperKey && searchTitle.length > 3) {
+    // ─── Step 3: Use Organic Search to find EXACT un-redirected store links ────────
+    // We avoid Google Shopping (/shopping) because it loosely matches products
+    // and returns hidden redirect tracking links. Pure organic search finds
+    // the exact item and the real direct link!
+    const searchTarget = `${aiResult.product.brand || ''} ${aiResult.product.title}`.trim();
+    if (serperKey && searchTarget.length > 5) {
       try {
-        const serperResp = await fetch('https://google.serper.dev/shopping', {
+        const query = `site:myntra.com OR site:flipkart.com OR site:amazon.in OR site:ajio.com OR site:tatacliq.com ${searchTarget}`;
+        const serperResp = await fetch('https://google.serper.dev/search', {
           method: 'POST',
           headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q: searchTitle + ' buy india', gl: 'in', hl: 'en', num: 15 }),
+          body: JSON.stringify({ q: query, gl: 'in', hl: 'en', num: 15 }),
           signal: AbortSignal.timeout(8000)
         });
         
         if (serperResp.ok) {
           const serperData = await serperResp.json();
-          const items = serperData.shopping || [];
+          const items = serperData.organic || [];
           
           for (const item of items) {
-            const source = (item.source || '').toLowerCase();
-            const link = item.link || item.url || '';
-            const priceStr = String(item.price || '').replace(/[₹,\s]/g, '').replace(/^Rs\.?/i, '');
-            const price = parseFloat(priceStr);
-            if (!price || price < 50) continue;
+            const link = item.link || '';
+            const snippet = item.snippet || '';
             
-            // Map serper source to our platforms
+            // Map URL to our platforms
             let matchedPlatform = '';
-            if (source.includes('myntra') || link.includes('myntra')) matchedPlatform = 'Myntra';
-            else if (source.includes('flipkart') || link.includes('flipkart')) matchedPlatform = 'Flipkart';
-            else if (source.includes('amazon') || link.includes('amazon')) matchedPlatform = 'Amazon';
-            else if (source.includes('ajio') || link.includes('ajio')) matchedPlatform = 'Ajio';
-            else if (source.includes('tata') || link.includes('tatacliq')) matchedPlatform = 'Tata CLiQ';
+            if (link.includes('myntra.com')) matchedPlatform = 'Myntra';
+            else if (link.includes('flipkart.com')) matchedPlatform = 'Flipkart';
+            else if (link.includes('amazon.in')) matchedPlatform = 'Amazon';
+            else if (link.includes('ajio.com')) matchedPlatform = 'Ajio';
+            else if (link.includes('tatacliq.com')) matchedPlatform = 'Tata CLiQ';
             
             if (matchedPlatform) {
               const existing = results.find((r: any) => r.platform.toLowerCase() === matchedPlatform.toLowerCase());
-              if (existing) {
-                // Keep the exact source URL instead of replacing it with a Serper tracking link,
-                // but UPDATE the price to the real Serper price if it's lower.
-                if (price < existing.price) {
-                  existing.price = price;
-                  existing.isFromSearch = true; // Mark as live price
+              
+              // Only override if we haven't found a real link for this platform yet
+              // (Organic results are ordered by relevance, so the first match is usually the best)
+              if (existing && !existing.isFromSearch) {
+                existing.url = link; // Found the REAL direct link!
+                existing.isFromSearch = true; // Mark that we found a real link
+                
+                // Try to extract the real price from the Google snippet
+                // Matches ₹699 or Rs. 699 or Rs 699
+                const priceMatch = snippet.match(/(?:₹|Rs\.?)\s*([\d,]+)/i);
+                if (priceMatch) {
+                   const snippetPrice = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+                   if (snippetPrice && snippetPrice > 50) {
+                     existing.price = snippetPrice; // Update estimated price to REAL price
+                   }
                 }
-              } else {
+              } else if (!existing) {
+                 // Completely new platform found organically
+                 let foundPrice = aiResult.product.price; // fallback to AI guess
+                 const priceMatch = snippet.match(/(?:₹|Rs\.?)\s*([\d,]+)/i);
+                 if (priceMatch) {
+                    const snippetPrice = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+                    if (snippetPrice > 50) foundPrice = snippetPrice;
+                 }
+                 
                  results.push({
                    platform: matchedPlatform,
-                   price: price,
-                   url: link, // Unseen platform, use serper link
+                   price: foundPrice,
+                   url: link,
                    currency: '₹',
                    isBest: false,
                    isFromSearch: true
@@ -181,7 +195,7 @@ export async function POST(req: Request) {
         title: aiResult.product.title, 
         price: aiResult.product.price, 
         brand: aiResult.product.brand, 
-        searchedWith: searchTitle, 
+        searchedWith: searchTarget, 
         usedGoogleShopping: results.some((r: any) => r.isFromSearch) 
       }
     });
