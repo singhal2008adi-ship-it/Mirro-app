@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import { signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
 import { Camera, Sparkles, ShoppingBag, ArrowRight } from "lucide-react";
 
 export default function LoginPage() {
@@ -23,12 +24,25 @@ export default function LoginPage() {
     return () => unsubscribe();
   }, [router]);
 
+// ... [inside the component]
   const handleGoogleLogin = async () => {
     if (!auth) return;
     setError(null);
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      
+      // Save user to Firestore for the admin panel
+      if (db && result.user) {
+        await setDoc(doc(db, "users", result.user.uid), {
+          uid: result.user.uid,
+          email: result.user.email,
+          displayName: result.user.displayName,
+          photoURL: result.user.photoURL,
+          lastLogin: new Date().toISOString()
+        }, { merge: true });
+      }
+      
       router.push("/");
     } catch (err: any) {
       console.error("Login failed:", err);
@@ -62,7 +76,7 @@ export default function LoginPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-white p-6 text-center">
         <h1 className="text-2xl font-bold mb-4 text-black font-sans tracking-tight">Configuration Required</h1>
-        <p className="text-gray-400 mb-8 font-medium max-w-xs">To launch Mirro, please configure your Firebase environment variables in the Vercel Dashboard.</p>
+        <p className="text-gray-400 mb-8 font-medium max-w-xs">To launch Mirrio, please configure your Firebase environment variables in the Vercel Dashboard.</p>
         <div className="bg-gray-50 p-6 rounded-[2rem] text-xs font-mono text-left w-full max-w-sm border border-gray-100/50 shadow-sm">
           <p className="text-gray-400 mb-2 uppercase tracking-widest font-bold">Required Keys:</p>
           <code className="text-black block overflow-x-auto whitespace-pre">

@@ -1,6 +1,6 @@
 {
-  "name": "Mirro - Virtual Try-On",
-  "short_name": "Mirro",
+  "name": "Mirrio - Virtual Try-On",
+  "short_name": "Mirrio",
   "description": "Premium virtual try-on and smart shopping assistant.",
   "start_url": "/",
   "display": "standalone",

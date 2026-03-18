@@ -27,7 +27,7 @@ export default function Home() {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-white p-6 text-center">
         <h1 className="text-2xl font-bold mb-4">Configuration Required</h1>
-        <p className="text-gray-500 mb-6">Please add your Firebase environment variables to Vercel or `.env.local` to start using Mirro.</p>
+        <p className="text-gray-500 mb-6">Please add your Firebase environment variables to Vercel or `.env.local` to start using Mirrio.</p>
         <div className="bg-gray-100 p-4 rounded-xl text-xs font-mono text-left w-full max-w-md">
           NEXT_PUBLIC_FIREBASE_API_KEY=...<br/>
           NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
@@ -47,7 +47,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-white p-6 flex flex-col">
       <header className="flex justify-between items-center mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-black">Mirro</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-black">Mirrio</h1>
         <button
           onClick={() => auth && signOut(auth)}
           className="text-sm font-medium text-gray-500 hover:text-black transition-colors"

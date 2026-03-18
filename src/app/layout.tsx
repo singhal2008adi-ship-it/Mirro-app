@@ -13,13 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mirro - Virtual Try-On",
+  title: "Mirrio - Virtual Try-On",
   description: "Premium virtual try-on and smart shopping assistant.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Mirro",
+    title: "Mirrio",
   },
   formatDetection: {
     telephone: false,
