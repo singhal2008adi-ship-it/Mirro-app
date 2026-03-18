@@ -1,134 +1,5 @@
 import { NextResponse } from 'next/server';
 
-// ─── Step 1: Extract product title + price from the source URL ───────────────
-async function extractProductFromUrl(url: string, geminiKey: string): Promise<{ title: string; price: number; brand: string; sourceUrl: string }> {
-  // Fetch the product page HTML
-  let html = '';
-  try {
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-IN,en;q=0.9',
-      },
-      signal: AbortSignal.timeout(8000)
-    });
-    html = await resp.text();
-  } catch { /* fall through to Gemini-only */ }
-
-  // Ask Gemini to extract from HTML
-  const prompt = html.length > 100
-    ? `Extract from this product page HTML: product title, brand name, and final SELLING price (NOT MRP/strikethrough, only the actual price the customer pays). Return ONLY JSON: {"title":"...","brand":"...","price":699}\n\nHTML (truncated):\n${html.slice(0, 10000)}`
-    : `This is a product URL: ${url}\nExtract product title, brand, and selling price in INR. Return ONLY JSON: {"title":"...","brand":"...","price":699}`;
-
-  const gemResp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      signal: AbortSignal.timeout(12000)
-    }
-  );
-
-  if (!gemResp.ok) return { title: 'Clothing Item', price: 999, brand: '', sourceUrl: url };
-  const data = await gemResp.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  const jsonMatch = raw.match(/\{[\s\S]*?\}/);
-  if (jsonMatch) {
-    try {
-      const p = JSON.parse(jsonMatch[0]);
-      return {
-        title: String(p.title || 'Clothing Item'),
-        price: Number(p.price) || 999,
-        brand: String(p.brand || ''),
-        sourceUrl: url
-      };
-    } catch { /* fall through */ }
-  }
-  return { title: 'Clothing Item', price: 999, brand: '', sourceUrl: url };
-}
-
-// ─── Step 2: Search Google Shopping for real prices & product URLs ────────────
-async function searchGoogleShopping(searchQuery: string, serperKey: string): Promise<Array<{ platform: string; price: number; url: string; title: string }>> {
-  const resp = await fetch('https://google.serper.dev/shopping', {
-    method: 'POST',
-    headers: {
-      'X-API-KEY': serperKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      q: searchQuery + ' buy india',
-      gl: 'in',      // India
-      hl: 'en',
-      num: 20
-    }),
-    signal: AbortSignal.timeout(8000)
-  });
-
-  if (!resp.ok) {
-    console.warn('[Pricing] Serper API failed:', resp.status);
-    return [];
-  }
-
-  const data = await resp.json();
-  const items: Array<{ platform: string; price: number; url: string; title: string }> = [];
-
-  // Target Indian e-commerce platforms
-  const targetPlatforms: Record<string, string> = {
-    'myntra.com': 'Myntra',
-    'flipkart.com': 'Flipkart',
-    'amazon.in': 'Amazon',
-    'ajio.com': 'Ajio',
-    'tatacliq.com': 'Tata CLiQ',
-    'nykaa.com': 'Nykaa Fashion',
-    'meesho.com': 'Meesho',
-    'snapdeal.com': 'Snapdeal',
-  };
-
-  for (const item of (data.shopping || [])) {
-    const source = item.source?.toLowerCase() || '';
-    const link = item.link || item.url || '';
-    let platform = '';
-    for (const [domain, name] of Object.entries(targetPlatforms)) {
-      if (source.includes(domain) || link.includes(domain)) {
-        platform = name;
-        break;
-      }
-    }
-    if (!platform) continue;
-
-    // Parse price - remove ₹, commas, etc.
-    const priceStr = String(item.price || '').replace(/[₹,\s]/g, '').replace(/^Rs\.?/i, '');
-    const price = parseFloat(priceStr);
-    if (!price || price < 100 || price > 50000) continue;
-
-    // Avoid duplicate platforms - keep lowest price
-    const existing = items.find(i => i.platform === platform);
-    if (existing) {
-      if (price < existing.price) { existing.price = price; existing.url = link; }
-    } else {
-      items.push({ platform, price, url: link, title: item.title || '' });
-    }
-  }
-
-  return items.sort((a, b) => a.price - b.price);
-}
-
-// ─── Fallback: deterministic price estimates if no Serper results ─────────────
-function buildFallbackPrices(basePrice: number, sourceUrl: string, searchTitle: string) {
-  const q = encodeURIComponent(searchTitle);
-  const platform = (url: string, domain: string) => sourceUrl.includes(domain) ? sourceUrl : '';
-
-  return [
-    { platform: 'Myntra',    title: searchTitle, price: basePrice,                    url: platform(sourceUrl, 'myntra') || `https://www.myntra.com/${q}`,                        isBest: false, isFromSearch: false },
-    { platform: 'Flipkart',  title: searchTitle, price: Math.round(basePrice * 0.95), url: platform(sourceUrl, 'flipkart') || `https://www.flipkart.com/search?q=${q}`,           isBest: false, isFromSearch: false },
-    { platform: 'Amazon',    title: searchTitle, price: Math.round(basePrice * 1.08), url: platform(sourceUrl, 'amazon') || `https://www.amazon.in/s?k=${q}`,                     isBest: false, isFromSearch: false },
-    { platform: 'Ajio',      title: searchTitle, price: Math.round(basePrice * 1.04), url: platform(sourceUrl, 'ajio') || `https://www.ajio.com/search/?text=${q}`,               isBest: false, isFromSearch: false },
-    { platform: 'Tata CLiQ', title: searchTitle, price: Math.round(basePrice * 1.12), url: `https://www.tatacliq.com/search/?searchCategory=all&text=${q}`,                      isBest: false, isFromSearch: false },
-  ];
-}
-
 export async function POST(req: Request) {
   try {
     const { query, imageBase64 } = await req.json();
@@ -136,22 +7,55 @@ export async function POST(req: Request) {
     const serperKey = process.env.SERPER_API_KEY;
 
     if (!query && !imageBase64) return NextResponse.json({ error: 'Query or image required' }, { status: 400 });
+    if (!geminiKey) return NextResponse.json({ error: 'Missing Gemini Key' }, { status: 500 });
 
-    let title = 'Clothing Item';
-    let price = 999;
-    let brand = '';
     const sourceUrl = query?.startsWith('http') ? query : '';
+    let aiResult: any = null;
 
-    // ─── Extract product details from URL via HTML + Gemini ───────────────────
-    if (sourceUrl && geminiKey) {
-      const extracted = await extractProductFromUrl(sourceUrl, geminiKey);
-      title = extracted.title;
-      price = extracted.price;
-      brand = extracted.brand;
-    } else if (imageBase64 && geminiKey) {
+    // ─── CASE A: WE HAVE A PRODUCT URL (CheckoutHub/Pasted Links) ───────────────
+    if (sourceUrl) {
+      let html = '';
+      try {
+        const resp = await fetch(sourceUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-IN,en;q=0.9',
+          },
+          signal: AbortSignal.timeout(8000)
+        });
+        html = await resp.text();
+      } catch { /* Fall through to URL only */ }
+
+      const prompt = html.length > 500
+        ? `I have a product page. Here is the HTML (truncated):\n\n${html.slice(0, 8000)}\n\nThe original URL is: ${sourceUrl}\n\nPlease:\n1. Extract the product title, brand, and the actual selling price (NOT the MRP/strikethrough price - the price the customer actually pays)\n2. For each of these Indian platforms: Myntra, Flipkart, Amazon, Ajio, Tata CLiQ - give me a direct search URL for this exact product and your best estimate of what it would cost there (based on typical pricing patterns)\n3. The platform where this URL came from should use this exact original URL.\n\nReturn ONLY clean JSON in this exact format:\n{\n  "product": {\n    "title": "...",\n    "brand": "...",\n    "price": 699\n  },\n  "platforms": [\n    { "name": "Myntra", "price": 699, "url": "https://exact-product-url-or-search" },\n    { "name": "Flipkart", "price": 649, "url": "https://flipkart.com/search?q=..." }\n  ]\n}`
+        : `Product URL: ${sourceUrl}\n\nPlease:\n1. Identify the product title, brand, and typical selling price in Indian Rupees\n2. For each of these Indian platforms: Myntra, Flipkart, Amazon, Ajio, Tata CLiQ - give me a search URL and estimated price\n\nReturn ONLY JSON:\n{\n  "product": { "title": "...", "brand": "...", "price": 699 },\n  "platforms": [\n    { "name": "Myntra", "price": 699, "url": "..." }\n  ]\n}`;
+
+      const gemResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+          signal: AbortSignal.timeout(20000)
+        }
+      );
+      
+      const data = await gemResp.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { aiResult = JSON.parse(match[0]); } catch { /* ignore */ }
+      }
+    } 
+    // ─── CASE B: WE HAVE AN IMAGE DIRECTLY (Virtual Try On uploaded images) ─────
+    else if (imageBase64) {
       const mimeMatch = imageBase64.match(/^data:([^;]+);base64,/);
       const mime = mimeMatch?.[1] || 'image/jpeg';
       const b64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+      
+      const prompt = `Look at this clothing item.\n1. Identify what it is, its likely brand style, and an estimated typical selling price in Indian Rupees (INR).\n2. For each of these Indian platforms: Myntra, Flipkart, Amazon, Ajio, Tata CLiQ - give me a search URL (e.g. https://www.myntra.com/search?q=...) for this exact style of item and your best estimated price for them.\n\nReturn ONLY exact JSON format:\n{\n  "product": { "title": "...", "brand": "...", "price": 699 },\n  "platforms": [\n    { "name": "Myntra", "price": 699, "url": "..." }\n  ]\n}`;
+
       const descResp = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
         {
@@ -159,81 +63,127 @@ export async function POST(req: Request) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [
-              { text: 'Identify brand, product name, and approximate Indian market selling price. Return ONLY JSON: {"title":"...","brand":"...","price":699}' },
+              { text: prompt },
               { inlineData: { mimeType: mime, data: b64 } }
             ]}]
           }),
-          signal: AbortSignal.timeout(12000)
+          signal: AbortSignal.timeout(20000)
         }
       );
-      if (descResp.ok) {
-        const descData = await descResp.json();
-        const raw = descData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-        const m = raw.match(/\{[\s\S]*?\}/);
-        if (m) try { const p = JSON.parse(m[0]); title = p.title || title; price = Number(p.price) || price; brand = p.brand || brand; } catch { /* */ }
-      }
-    } else if (query && !query.startsWith('http')) {
-      title = query;
-    }
-
-    const searchTitle = brand ? `${brand} ${title}`.slice(0, 80) : title.slice(0, 80);
-
-    // ─── Search Google Shopping for REAL prices ─────────────────────────────
-    let results: Array<{ platform: string; price: number; url: string; title: string; isBest: boolean; isFromSearch: boolean; currency: string }> = [];
-
-    if (serperKey && searchTitle !== 'Clothing Item') {
-      console.log('[Pricing] Searching Google Shopping for:', searchTitle);
-      const shoppingResults = await searchGoogleShopping(searchTitle, serperKey);
-      console.log('[Pricing] Found', shoppingResults.length, 'Google Shopping results');
-
-      if (shoppingResults.length > 0) {
-        // If user provided source URL: override that platform's price+url with the exact source
-        results = shoppingResults.map(r => ({
-          ...r,
-          // Use exact source URL for matching platform
-          url: sourceUrl && (
-            (r.platform === 'Myntra' && sourceUrl.includes('myntra')) ||
-            (r.platform === 'Flipkart' && sourceUrl.includes('flipkart')) ||
-            (r.platform === 'Amazon' && sourceUrl.includes('amazon'))
-          ) ? sourceUrl : r.url,
-          isBest: false,
-          isFromSearch: true,
-          currency: '₹'
-        }));
+      
+      const data = await descResp.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { aiResult = JSON.parse(match[0]); } catch { /* ignore */ }
       }
     }
 
-    // Fill in missing platforms with fallback + ensure source platform is always present
-    const fallbacks = buildFallbackPrices(price, sourceUrl, searchTitle);
-    const presentPlatforms = new Set(results.map(r => r.platform));
+    // Process results to match the frontend expectations of CheckoutHub
+    if (!aiResult || !aiResult.product) {
+       aiResult = { product: { title: 'Clothing Item', brand: '', price: 999 }, platforms: [] };
+    }
 
-    for (const fb of fallbacks) {
-      if (!presentPlatforms.has(fb.platform)) {
-        results.push({ ...fb, currency: '₹', isFromSearch: false });
+    let results = (aiResult.platforms || []).map((p: any) => ({
+      platform: p.name,
+      price: Number(p.price) || aiResult.product.price,
+      url: p.url || '',
+      currency: '₹',
+      isBest: false,
+      isFromSearch: false // Not from Google Shopping
+    }));
+
+    // ─── Optional: If Serper Key is available, do a Google Shopping Search ──────
+    // The previous implementation used Serper. If the user wants the AI-only
+    // approach to just provide the frontend data, we will return the AI results directly.
+    // However, to keep it robust and identical to the requested logic, we can still fetch Serper
+    // and replace matching AI prices with REAL Google Shopping prices if found.
+    const searchTitle = `${aiResult.product.brand || ''} ${aiResult.product.title}`.trim();
+    if (serperKey && searchTitle.length > 3) {
+      try {
+        const serperResp = await fetch('https://google.serper.dev/shopping', {
+          method: 'POST',
+          headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: searchTitle + ' buy india', gl: 'in', hl: 'en', num: 15 }),
+          signal: AbortSignal.timeout(8000)
+        });
+        
+        if (serperResp.ok) {
+          const serperData = await serperResp.json();
+          const items = serperData.shopping || [];
+          
+          for (const item of items) {
+            const source = (item.source || '').toLowerCase();
+            const link = item.link || item.url || '';
+            const priceStr = String(item.price || '').replace(/[₹,\s]/g, '').replace(/^Rs\.?/i, '');
+            const price = parseFloat(priceStr);
+            if (!price || price < 50) continue;
+            
+            // Map serper source to our platforms
+            let matchedPlatform = '';
+            if (source.includes('myntra') || link.includes('myntra')) matchedPlatform = 'Myntra';
+            else if (source.includes('flipkart') || link.includes('flipkart')) matchedPlatform = 'Flipkart';
+            else if (source.includes('amazon') || link.includes('amazon')) matchedPlatform = 'Amazon';
+            else if (source.includes('ajio') || link.includes('ajio')) matchedPlatform = 'Ajio';
+            else if (source.includes('tata') || link.includes('tatacliq')) matchedPlatform = 'Tata CLiQ';
+            
+            if (matchedPlatform) {
+              const existing = results.find((r: any) => r.platform.toLowerCase() === matchedPlatform.toLowerCase());
+              if (existing) {
+                // Keep the exact source URL instead of replacing it with a Serper tracking link,
+                // but UPDATE the price to the real Serper price if it's lower.
+                if (price < existing.price) {
+                  existing.price = price;
+                  existing.isFromSearch = true; // Mark as live price
+                }
+              } else {
+                 results.push({
+                   platform: matchedPlatform,
+                   price: price,
+                   url: link, // Unseen platform, use serper link
+                   currency: '₹',
+                   isBest: false,
+                   isFromSearch: true
+                 });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Serper fetch failed', e);
       }
     }
 
-    // Ensure source URL platform exists and uses the exact URL
+    // Ensure source URL is used accurately and not lost
     if (sourceUrl) {
-      const sourcePlatform = sourceUrl.includes('myntra') ? 'Myntra'
-        : sourceUrl.includes('flipkart') ? 'Flipkart'
-        : sourceUrl.includes('amazon') ? 'Amazon'
-        : sourceUrl.includes('ajio') ? 'Ajio'
+      const sourceName = sourceUrl.includes('myntra') ? 'myntra' 
+        : sourceUrl.includes('flipkart') ? 'flipkart'
+        : sourceUrl.includes('amazon') ? 'amazon'
+        : sourceUrl.includes('ajio') ? 'ajio'
         : '';
-      if (sourcePlatform) {
-        const existing = results.find(r => r.platform === sourcePlatform);
-        if (existing) existing.url = sourceUrl;
+      
+      const target = results.find((r: any) => r.platform.toLowerCase() === sourceName);
+      if (target) {
+        target.url = sourceUrl;
       }
     }
 
-    // Sort by price and mark best
-    results.sort((a, b) => a.price - b.price);
-    const minPrice = Math.min(...results.map(r => r.price));
-    results.forEach(r => { r.isBest = r.price === minPrice; });
+    // Sort and mark best
+    if (results.length > 0) {
+      results.sort((a: any, b: any) => a.price - b.price);
+      const minPrice = results[0].price;
+      results.forEach((r: any) => { r.isBest = (r.price === minPrice) });
+    }
 
     return NextResponse.json({
       results: results.slice(0, 6),
-      meta: { title, price, brand, searchedWith: searchTitle, usedGoogleShopping: !!serperKey }
+      meta: { 
+        title: aiResult.product.title, 
+        price: aiResult.product.price, 
+        brand: aiResult.product.brand, 
+        searchedWith: searchTitle, 
+        usedGoogleShopping: results.some((r: any) => r.isFromSearch) 
+      }
     });
 
   } catch (error: unknown) {
